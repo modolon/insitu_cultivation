@@ -1,0 +1,173 @@
+library(qiime2R)
+library(phyloseq)
+library(ggplot2)
+library(ggrepel)
+library(vegan)
+library(reshape2)
+library("DESeq2")
+library(dplyr)
+
+
+###import###
+#chip
+##importanto a tabela de otu Device - Subcultivo
+otu.tab.dev.sub <- read.table("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/otu-retrieved.txt")
+OTU.DEV.SUB = otu_table(otu.tab.dev.sub, taxa_are_rows = TRUE)
+OTU.DEV.SUB
+
+
+#Importando a tabela taxonomy Device - Subcultivo
+tax.tab.dev.sub <- read.table("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/taxa-retrieved.txt")
+tax.tab.df.dev.sub <- data.frame(tax.tab.dev.sub)
+tax.tab.m.dev.sub <- as.matrix((tax.tab.df.dev.sub))
+TAX.DEV.SUB = tax_table(tax.tab.m.dev.sub)
+TAX.DEV.SUB
+
+#criando um objeto phyloseq, com apenas os dados da tabela de OTU e taxnonomy
+
+physeq.dev.sub = phyloseq(OTU.DEV.SUB, TAX.DEV.SUB)
+physeq.dev.sub
+
+
+#criando uma ·rvore filogenÈtica com o pacote ape
+#####################################################
+
+library(ape)
+dev.sub_tree = rtree(ntaxa(physeq.dev.sub), rooted=TRUE, tip.label=taxa_names(physeq.dev.sub))
+#plot(dev.sub_tree)
+
+#importando uma tabela de metadados
+
+data.dev.sub = read.csv("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/meta-retrieved.txt")
+sample.data.dev.sub = sample_data(data.dev.sub)
+
+##convergindo os dados do objeto phyloseq com os dados da tabela de metadados
+rownames(sample.data.dev.sub) <- sample_names(physeq.dev.sub)
+
+##criando um novo objeto phyloseq, agora com a tabela de OTU, taxonomy, metadados e tree juntos
+
+physeq = phyloseq(OTU.DEV.SUB, TAX.DEV.SUB, sample.data.dev.sub, dev.sub_tree)
+
+
+#duplicando o objeto phyloseq
+ps = physeq
+
+#######normalizando os dados
+dsd <-phyloseq_to_deseq2(ps, ~device) 
+dsd
+
+cts <- counts(dsd)
+table(cts)
+geoMeans <- apply(cts, 1, function(row) if (all(row == 0)) 0 else exp(mean(log(row[row != 0]))))
+diagdds = estimateSizeFactors(dsd, geoMeans = geoMeans)
+dds = estimateDispersions(diagdds)
+
+vst<- varianceStabilizingTransformation(dds, blind=FALSE)
+
+deseq2 <- varianceStabilizingTransformation(dds, blind = TRUE, fitType = "parametric")
+vstMat<- assay(vst)
+vstMat[vstMat<0]<-0
+
+vst.otu.counts<-otu_table(vstMat, taxa_are_rows=TRUE)
+
+normalized <- ps # aqui vocÍ duplica o objeto para n„o precisar sobrepor
+otu_table(normalized) <- otu_table(vst.otu.counts)
+ps = normalized
+ps
+
+############################ DESEQ ####
+library("DESeq2")
+
+
+#######the next step was adapted from https://www.yanh.org/2021/01/01/microbiome-r/
+
+# factorize for DESeq2
+sample_data(ps)$device <- as.factor(sample_data(ps)$device)
+ps.taxa <- tax_glom(ps, taxrank = 'Family', NArm = TRUE)
+
+
+#####################DESEQ2
+ps.taxa.pse <- ps.taxa
+otu_table(ps.taxa.pse) <- otu_table(ps.taxa) + 1
+
+#library(metagMisc)
+#dev.sub <-phyloseq_to_df(ps.taxa.pse, addtax = TRUE, addtot = FALSE, addmaxrank = FALSE, sorting = "taxonomy")
+#View(dev.sub)
+#write.table(dev.sub, "/Users/fmodo/Documents/Analysis-InSituCultivation/ASV.Tab-diff.txt", sep = "\t")
+
+# pairwise comparison between samples (chip vs chip subculture)
+ps.taxa.pse.sub <- subset_samples(ps.taxa.pse, device %in% c("Traditional_cultivation", "chip_subculture"))
+ds = phyloseq_to_deseq2(ps.taxa.pse.sub, ~device)
+ds = DESeq(ds, test="Wald", fitType="parametric")
+
+alpha = 0.05 
+res = results(ds, alpha=alpha)
+res = res[order(res$log2FoldChange, na.last=NA), ]
+
+ 
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(ps)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+dim(sigtab)
+
+
+#######plot
+
+theme_set(theme_bw())
+scale_fill_discrete <- function(palname = "Paired", ...) {
+  scale_fill_brewer(palette = palname, ...)
+}
+
+
+# Phylum order
+x = tapply(sigtab$log2FoldChange, sigtab$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Phylum = factor(as.character(sigtab$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+
+####Plot1
+ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=6) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))
+
+#######Plot2
+
+
+##
+
+sigtab.sub <- sigtab[!is.na(sigtab$Phylum),] #remove NA em filos
+sigtab.sub2 <- sigtab.sub[!is.na(sigtab.sub$Family),] #remove NA em filos
+
+plot.diffanbund <- ggplot(sigtab.sub2, aes(x=Family, y=log2FoldChange, fill=Phylum)) + geom_point(aes(fill=Phylum), colour="black",pch=21, size=5) +  
+  geom_hline(yintercept=0, linetype="dashed", color = "black", size = 1)+
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust=0))+
+  scale_fill_manual(values = c("#f3c300", "#875692", "#f38400", "#a1caf1", "#be0032", "#c2b280",
+                               "#848482", "#008856", "#e68fac", "#0067a5", "#f99379", "#604e97",
+                               "#f6a600", "#b3446c", "#dcd300", "#882d17", "#8db600", "#654522",
+                               "#e25822", "#2b3d26")) +
+  coord_flip()+
+  ggtitle("Chip Subcultivation vs. Traditional cultivation", c(""))+
+  theme_bw()+
+  theme(text = element_text(face = "plain", size=12, color = "black"), legend.position="right", 
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0, size=12, color = "black"), 
+        axis.text.y = element_text(size=12, color = "black"),
+        panel.grid.major.y = element_line(colour = "gray80", size = 0.1, linetype = 2), 
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        #axis.title.x = element_text(size = 14),
+        axis.title = element_text(size = 12, face = "bold"),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(face = "bold", size = 12, color = "black"),
+        plot.title = element_text(color = "black", size = 12, face = "bold", hjust = 0.5))+
+  guides(fill = guide_legend(ncol=1, direction = "vertical", title.position = "top", title.hjust = 0.5))
+
+
+
+plot.diffanbund
+
+ggsave(filename = "C:/Users/fmodo/Documents/Analysis-InSituCultivation/Results/diff.abund.chip-sub_vs_trad.png", plot = plot.diffanbund, dpi = 600, width = 8, height = 10)
+#----
