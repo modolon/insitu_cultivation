@@ -1,0 +1,247 @@
+library(qiime2R)
+library(phyloseq)
+library(ggplot2)
+library(ggpubr)
+library(ggrepel)
+library(gplots)
+library(vegan)
+library(DESeq2)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(ggthemes)
+library(ape)
+
+####alfa_div####
+
+###import###
+
+##importanto a tabela de otu Device - Subcultivo
+otu.tab.dev.sub <- read.table("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/otu-retrieved.txt")
+OTU.DEV.SUB = otu_table(otu.tab.dev.sub, taxa_are_rows = TRUE)
+OTU.DEV.SUB
+
+
+#Importando a tabela taxonomy Device - Subcultivo
+tax.tab.dev.sub <- read.table("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/taxa-retrieved.txt")
+tax.tab.df.dev.sub <- data.frame(tax.tab.dev.sub)
+tax.tab.m.dev.sub <- as.matrix((tax.tab.df.dev.sub))
+TAX.DEV.SUB = tax_table(tax.tab.m.dev.sub)
+TAX.DEV.SUB
+
+#criando um objeto phyloseq, com apenas os dados da tabela de OTU e taxnonomy
+
+physeq.dev.sub = phyloseq(OTU.DEV.SUB, TAX.DEV.SUB)
+physeq.dev.sub
+
+
+#criando uma ·rvore filogenÈtica com o pacote ape
+#####################################################
+dev.sub_tree = rtree(ntaxa(physeq.dev.sub), rooted=TRUE, tip.label=taxa_names(physeq.dev.sub))
+#plot(dev.sub_tree)
+
+#importando uma tabela de metadados
+
+data.dev.sub = read.csv("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/meta-retrieved.txt")
+sample.data.dev.sub = sample_data(data.dev.sub)
+
+##convergindo os dados do objeto phyloseq com os dados da tabela de metadados
+rownames(sample.data.dev.sub) <- sample_names(physeq.dev.sub)
+
+##criando um novo objeto phyloseq, agora com a tabela de OTU, taxonomy, metadados e tree juntos
+
+physeq = phyloseq(OTU.DEV.SUB, TAX.DEV.SUB, sample.data.dev.sub, dev.sub_tree)
+
+
+#duplicando o objeto phyloseq
+ps = physeq
+
+
+
+################################################################################
+################################################################################
+################################################################################
+################################################################################
+################################################################################
+################################################################################
+################################################################################
+
+# Verificar o numero de sequencias por amostra
+sort(sample_sums(ps))
+
+
+##################################
+
+# Observar curva de rarefaÁ„o
+#' step = intervalo de c·lculo (Quanto menor, mais detalhado ser·. Isso ir· aumentar muito o tempo de processamento dependendo do tamanho do seu conjunto de dados)
+#' sample = posiÁ„o no eixo x (n˙mero de sequencias) onde se pretende adicionar linhas para demarcar um ponto (substitua pelos valores que fazem sentido para seus dados)
+#' Os intervalos selecionados em "sample" podem ser escolhidos com base no numero de sequencias observado no comando "sort(sample_sums(ps))"
+#' cex e lwd s„o parametros gr·ficos
+
+rarecurve(t(otu_table(ps)), step = 1000, sample = c(8446, 123137), cex = 1, lwd = 1)
+
+#' Observar a diferenÁa na riqueza de especies entre os dados brutos e rarefeitos
+#' A funÁ„o specnumber vai retorna a riqueza das amostras
+#' A funÁ„o rarefy_even_depth vai subselecionar o n˙mero de sequencias escolhido (rarefaÁ„o). 
+#' sample.size = min(sample_sums(ps)) == Nesse caso estamos informando para subselecionar para o n˙mero mÌnimo de sequencias observado entre as amostras.
+
+S <- specnumber(t(otu_table(ps))) # N˙mero de espÈcies observado nos dados originais
+ps.rare <- rarefy_even_depth(ps, sample.size = min(sample_sums(ps)))
+Srare <- specnumber(t(otu_table(ps.rare))) # N˙mero de espÈcies observados nos dados rarefeitos
+
+# Observar a diferenÁa na riqueza entre os dados (original vs rarefeita)
+#' Nota: È esperado que a profundidade de rarefaÁ„o escolhida para esse conjunto de dados (GlobalPatterns) faÁa com que espÈcies sejam perdidas, isso ocorre porque a profundidade
+#' de sequenciamento da maioria das amostras È alta e o numero de sequencias selecionado (o mÌnimo identicado entre as amostras) È muito pequeno. Transponha essa observaÁ„o para seus dados
+#' para decidir se manter uma amostra com poucas sequencias vale a pena frente a perda de diversidade.
+
+plot(S, Srare, xlab = "Observed No. of Species", ylab = "Rarefied No. of Species")
+abline(0, 1)
+
+# RarefaÁ„o
+#' sample.size = profundidade de rarefaÁ„o escolhida. Escolha esse valor de acordo com seus dados. Defina esse valor de acordo com as an·lises anteriores
+#' sample_size aqui ainda est· selecionando o n˙mero mÌnimo de sequencias identificado entre as amostras. 
+#' Isso È sÛ um exemplo e uma forma de manter todas as amostras, mas pode n„o ser o ideal para seu conjunto de dados.
+
+ps.rare1 <- rarefy_even_depth(ps, sample.size = min(sample_sums(ps)))
+
+#' Calcular indices de diversidade
+#' Usando a configuraÁ„o abaixo È possÌvel calcula o indice e adicion·-lo como uma nova coluna em sem arquivo sample_data()
+#' A funÁ„o estimate_richness() permite o c·lculo de outros indices de diversidade. Observe o arquivo de ajuda para saber como calcular. 
+
+sample_data(ps.rare1)$Chao1 <- estimate_richness(ps.rare1, measures="Chao1", split = TRUE)[,1]
+sample_data(ps.rare1)$Shannon <- estimate_richness(ps.rare1, measures="Shannon", split = TRUE)[,1]
+sample_data(ps.rare1)$Observed <- estimate_richness(ps.rare1,measures="Observed", split = TRUE)[,1]
+sample_data(ps.rare1)$InvSimpson <- estimate_richness(ps.rare1,measures="InvSimpson", split = TRUE)[,1]
+
+
+alpha <- estimate_richness(ps.rare1, measures = c("Shannon", "InvSimpson", 'Chao1'))
+
+alpha
+
+#' Gerar gr·ficos com os Ìndices de riqueza e diversidade
+
+plot.obs <- plot_richness(ps.rare1, x="method", color="device", nrow=1, measures=c("Shannon",
+                                                                                                 
+                                                                                                 "Chao1")) +
+  
+  geom_boxplot() +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, size=10, color = "black")) #+
+#scale_x_discrete(limits=c("SW", "Glass", "HDPE", "LDPE", "PBAT"))
+
+plot.obs
+
+ggsave(filename = "C:/Users/fmodo/Documents/Analysis-InSituCultivation/Results/Shannon-chao-chamb-chamb_sub.png", plot = plot.obs,
+       width = 14, height = 5, dpi = 600)
+
+####################A PARTIR DAQUI PRECISA SUBSTITUIR OS VALORES PARA ADEQUAR ¿S SUAS AMOSTRAS###
+##################################################################################################
+##############################################################################################
+##################################################################################################
+###################################################################################################
+
+
+plot.obs1 = plot.obs  + scale_color_manual(values=c("#A5A5A5", "#0070C0", "#9933FF", "#70AD47", "#BF9000", "#C55A11" ))
+#plot.obs1 + scale_fill_manual(values=c("#A5A5A5", "#0070C0", "#9933FF", "#70AD47", "#BF9000", "#C55A11" ))
+
+
+#plot.obs1 = plot.obs  + scale_fill_manual(values=c("#000000", "#f28e2b", "#e15759",
+                                                  #"#76b7b2", "#59a14f", "#edc948"))
+#organizando a ordem das amostras
+plot.obs2 = plot.obs1 + scale_x_discrete(limits=c("MDAS", "Traditional_cultivation",
+                                                  "chip2_close", "chip1_close",
+                                                  "chip2_distant", "chip1_distant",
+                                                  "chip2_distant_subculture", "chip1_distant_subculture",
+                                                  "chip2_close_subculture", "chip1_close_subculture",
+                                                
+                                                  "chamber2_close", "chamber1_close",
+                                                  "chamber2_distant", "chamber1_distant",
+                                                  "chamber2_distant_subculture", "chamber1_distant_subculture",
+                                                  "chamber2_close_subculture", "chamber1_close_subculture"
+                                                  ))
+
+plot.obs2
+
+#plot.obs$layers <- plot.obs$layers[-1]
+#plot.obs$layers <- plot.obs$layers[-1]
+#plot.obs
+
+ggsave(filename = "C:/Users/fmodo/Documents/Analysis-InSituCultivation/Results/Shannon-chao-RETRIEVED.png", plot = plot.obs2,
+       width = 14, height = 5, dpi = 600)
+
+plot.obs2
+
+#############
+
+
+                   
+                   #######
+                 ad.test.df <- alpha[,c('Shannon', 'Chao1')]
+                 ad.test.df <- cbind(ad.test.df,
+                                       sample_data(ps.rare1)[, c('method')])
+                 colnames(ad.test.df) <- c('Shannon', 'Chao1', 'method')
+                   
+                   
+                   ####testes####
+                   
+                   ##testar normalidade
+                   shapiro.test(ad.test.df$Shannon)
+                   #shapiro.test(ad.test.df$InvSimpson)
+                   shapiro.test(ad.test.df$Chao1)
+                   
+                   #RESULTADO: MEUS DADOS NAO SAO NORMAIS
+                   
+                   ##se a distribuiÁ„o n„o for normal
+                   kruskal.shannon <- kruskal.test(Shannon ~ method, data=ad.test.df)
+                   data.frame(unlist(kruskal.shannon))
+                   
+                  
+                   #kruskal.invsimpson <- kruskal.test(InvSimpson ~ method, data=ad.test.df)
+                   #data.frame(unlist(kruskal.invsimpson))
+                   
+                   kruskal.Chao1 <-  kruskal.test(Chao1 ~ method, data=ad.test.df)
+                   data.frame(unlist(kruskal.Chao1))
+                  
+                   
+                   ##se a distribuiÁ„o for normal
+                   test_anova_shannon <- aov(Shannon ~ method, data=ad.test.df)
+                   summary(test_anova_shannon)
+                   
+                   test_anova_chao1 <- aov(Chao1 ~ method, data=ad.test.df)
+                   summary(test_anova_chao1)
+                   
+                   #tUKEY
+                   ##shannon
+                   tukey.shnnon <- TukeyHSD( test_anova_shannon )
+    ### creating the compact letter display
+                   library(multcompView)
+                   tukey.cld.shannon <- multcompLetters4(test_anova_shannon, tukey.shnnon)
+                   print(tukey.cld.shannon)               
+    
+                   ##Chao1
+                   tukey.chao1 <- TukeyHSD(test_anova_chao1)
+    ### creating the compact letter display
+                   tukey.cld.chao1 <- multcompLetters4(test_anova_chao1, tukey.chao1)
+                   print(tukey.cld.chao1)
+                   
+                   # Teste T
+                   t.test(Shannon ~ method, data=ad.test.df)
+                   
+                   ## Mann-Whitney
+                   
+                   #wilcox.test(Shannon ~ Portion2, data=ad.test.df)
+                   
+                   pairwise.wilcox.test(ad.test.df$Shannon, ad.test.df$method,
+                                        p.adjust.method = "BH")
+                   
+                   pairwise.wilcox.test(ad.test.df$Chao1, ad.test.df$method,
+                                        p.adjust.method = "BH")
+                   
+                  # pairwise.wilcox.test(ad.test.df$InvSimpson, ad.test.df$method,
+                   #                     p.adjust.method = "BH")
+                   
+                   
+
+                  
+
+                                      
