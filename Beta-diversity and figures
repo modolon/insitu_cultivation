@@ -1,0 +1,400 @@
+
+library(devtools)
+#install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+library(pairwiseAdonis)
+library(qiime2R)
+library(phyloseq)
+library(ggplot2)
+library(ggpubr)
+library(ggrepel)
+library(gplots)
+library(vegan)
+library(DESeq2)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(ggthemes)
+library(metagMisc)
+library("ape")
+
+################################################################################################
+################################################################################################
+####beta_div####RETRIEVD
+####RETRIEVD
+
+###import###
+
+##importanto a tabela de otu retrieved
+otu.tab.dev.sub <- read.table("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/otu-retrieved.txt")
+OTU.DEV.SUB = otu_table(otu.tab.dev.sub, taxa_are_rows = TRUE)
+OTU.DEV.SUB
+
+
+#Importando a tabela taxonomy retrieved
+tax.tab.dev.sub <- read.table("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/taxa-retrieved.txt")
+tax.tab.df.dev.sub <- data.frame(tax.tab.dev.sub)
+tax.tab.m.dev.sub <- as.matrix((tax.tab.df.dev.sub))
+TAX.DEV.SUB = tax_table(tax.tab.m.dev.sub)
+TAX.DEV.SUB
+
+#criando um objeto phyloseq, com apenas os dados da tabela de OTU e taxnonomy
+
+physeq.dev.sub = phyloseq(OTU.DEV.SUB, TAX.DEV.SUB)
+physeq.dev.sub
+
+
+#criando uma ·rvore filogenÈtica com o pacote ape
+#####################################################
+dev.sub_tree = rtree(ntaxa(physeq.dev.sub), rooted=TRUE, tip.label=taxa_names(physeq.dev.sub))
+#plot(dev.sub_tree)
+
+#importando uma tabela de metadados
+
+data.dev.sub = read.csv("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/meta-retrieved.txt")
+sample.data.dev.sub = sample_data(data.dev.sub)
+
+##convergindo os dados do objeto phyloseq com os dados da tabela de metadados
+rownames(sample.data.dev.sub) <- sample_names(physeq.dev.sub)
+
+##criando um novo objeto phyloseq, agora com a tabela de OTU, taxonomy, metadados e tree juntos
+
+physeq = phyloseq(OTU.DEV.SUB, TAX.DEV.SUB, sample.data.dev.sub, dev.sub_tree)
+
+
+#duplicando o objeto phyloseq
+ps = physeq
+
+
+#######usar os scripts seguintes todos com o objeto ps, e sÛ alterar na hora de correr os dados
+
+##################usar os mesmos scripts a seguir, para todos os objetos phyloseq,
+#salvar os resultados para cada comparacao e depois correr o script novamente
+##ocultar/retirar ASVs n„o desejadas na an·lise## 
+
+sub1 <- subset_taxa(ps, !Kingdom %in% c("Eukaryota", "Unassigned"))
+
+sub2 <- subset_taxa(sub1, !Phylum %in% c("Ciliophora"))
+
+sub2.2 <- subset_taxa(sub2, !Order %in% c("Chloroplast"))
+
+ps <- subset_taxa(sub2.2, !Family %in% c("Mitochondria"))
+
+############
+
+
+#######normalizando os dados
+dsd <-phyloseq_to_deseq2(ps, ~method) 
+dsd
+
+cts <- counts(dsd)
+table(cts)
+geoMeans <- apply(cts, 1, function(row) if (all(row == 0)) 0 else exp(mean(log(row[row != 0]))))
+diagdds = estimateSizeFactors(dsd, geoMeans = geoMeans)
+dds = estimateDispersions(diagdds)
+
+vst<- varianceStabilizingTransformation(dds, blind=FALSE)
+
+deseq2 <- varianceStabilizingTransformation(dds, blind = TRUE, fitType = "parametric")
+vstMat<- assay(vst)
+vstMat[vstMat<0]<-0
+
+vst.otu.counts<-otu_table(vstMat, taxa_are_rows=TRUE)
+
+normalized <- ps # aqui vocÍ duplica o objeto para n„o precisar sobrepor
+otu_table(normalized) <- otu_table(vst.otu.counts)
+normalized
+
+
+
+# Plot ----
+# NMDS
+bray_nmds <- ordinate(physeq = normalized, method = "NMDS", distance = "unifrac")
+#wuni_nmds$points
+#wuni_nmds$stress
+
+ordplot <- plot_ordination(physeq = normalized, ordination = bray_nmds, shape = "device", color = "method") 
+
+ordplot 
+
+p = ordplot + geom_point(size = 2)
+
+p = p + scale_color_tableau("Tableau 10")
+
+p
+
+
+
+
+# Testes estatÌsticos ----
+unifrac_dist <- phyloseq::distance(normalized, method="unifrac", weighted=T)
+sd.table <- data.frame(sample_data(normalized))
+
+# Adonis -> permanova
+adonis2(unifrac_dist ~ sample_type, data = sd.table)
+
+
+# Anosim
+dist <- anosim(unifrac_dist, sd.table$sample_type, permutations = 999)
+summary(dist)
+
+# Betadisper e Anova
+betadisper(unifrac_dist, sd.table$sample_type)
+anova(betadisper(unifrac_dist, sd.table$sample_type))
+
+
+
+################
+
+#PCOA usando "sample_type" como fator
+normalized # esse arquivo saiu do Deseq2
+
+ordu_PCoA = ordinate(normalized, "PCoA", "unifrac", weighted=TRUE)
+ordu_PCoA
+
+plot_pca <- plot_ordination(normalized, ordu_PCoA, type="sample_type", color="device", shape = "device") +
+  geom_point(size=5) + theme_bw() + scale_color_brewer(palette = "Set1") +
+  scale_shape_manual(values=c(15, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19)) + geom_point(size=5)
+
+plot_pca + stat_ellipse(type = "norm", linetype = 8)
+
+plot_pca
+
+
+ggsave(filename = "C:/Users/fmodo/Documents/Analysis-InSituCultivation/Results/pca-retrieved2.png", plot = plot_pca, dpi = 600, width = 9, height = 6)
+
+
+########
+
+plot_pca2 <- plot_ordination(normalized, ordu_PCoA, type="sample_type", color="device", shape = "device") +
+  geom_point(size=5) + theme_bw() +
+  scale_color_manual(values=c("#A5A5A5", "#0070C0", "#9933FF", "#70AD47", "#BF9000", "#C55A11" )) +
+ # scale_fill_manual(values=c("#A5A5A5", "#0070C0", "#9933FF", "#70AD47", "#BF9000", "#C55A11" )) +
+  scale_shape_manual(values=c(15, 16, 17, 3, 4, 18)) + geom_point(size=5)
+
+plot_pca2
+
+ggsave(filename = "C:/Users/fmodo/Documents/Analysis-InSituCultivation/Results/pca-retrieved3.png", plot = plot_pca2, dpi = 600, width = 9, height = 6)
+#####Os seguintes testes sÛ funcionam se tiver uma ·rvore filogenÈtica
+# Testes estatÌsticos ----
+unifrac_dist <- phyloseq::distance(normalized, method="unifrac", weighted=T)
+sd.table <- data.frame(sample_data(normalized))
+
+# Adonis -> permanova
+adonis2(unifrac_dist ~ device, data = sd.table)
+
+# Anosim
+dist <- anosim(unifrac_dist, sd.table$device, permutations = 999)
+summary(dist)
+
+# Betadisper e Anova
+betadisper(unifrac_dist, sd.table$device)
+anova(betadisper(unifrac_dist, sd.table$device))
+
+# Pairwise.adonis
+pairwise.adonis2(unifrac_dist ~ device, data = sd.table)
+
+# Pairwise.adonis para method
+pair.adonis.method <- pairwise.adonis2(unifrac_dist ~ method, data = sd.table)
+print(pair.adonis.method)
+write.csv(pair.adonis.method, "/Users/fmodo/Documents/Analysis-InSituCultivation/Results/pair.beta.method.txt", row.names = FALSE)
+
+
+#_______________________
+###extract otu_table
+
+dev.sub <-phyloseq_to_df(normalized, addtax = TRUE, addtot = FALSE, addmaxrank = FALSE, sorting = "taxonomy")
+View(dev.sub)
+write.table(dev.sub, "/Users/fmodo/Documents/Analysis-InSituCultivation/Results/ASV.TAB_chamb.chamb-sub-norm.txt", sep = "\t")
+
+
+
+####################################################################
+###################################################################
+##########TAXAPLOT################################################
+
+
+nor.fami <- tax_glom(normalized, "Family")
+nor.fami.ra  = transform_sample_counts(nor.fami,
+                                       function(x) x / sum(x))
+
+
+#filtrando as principais otus
+nor.fami.ra.top = filter_taxa(nor.fami.ra,
+                              function(x) mean(x) > 1e-2,
+                              TRUE) #aqui determina a quantidade de ASV analisadas - 1e-2 = 0.01, ou 1%
+
+nor.fami.ra.top.ra = transform_sample_counts(nor.fami.ra.top,
+                                             function(x) x / sum(x))
+
+nor.fami.ra.top.ra.prune = prune_taxa(names(sort(taxa_sums(nor.fami.ra.top.ra),
+                                                 TRUE)) [1:10],nor.fami.ra.top.ra)
+
+plot_bar <- plot_bar(nor.fami.ra.top.ra.prune, x="Sample" ,fill="Family") +
+  facet_grid (rows = ~device, scales = "free_x", space = "free")
+labs(fill="Family")+ 
+  xlab("Sample") + 
+  ylab("Relative Abundance") + 
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5, size=9, color = "black"),
+        axis.text.y = element_text(size=9, color = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(colour = "black"),
+        axis.title = element_text(size = 9, face = "bold"),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(face = "bold", size = 9, color = "black"),
+        strip.text.x = element_text(face = "plain", size = 9, color = "black"))+
+  scale_x_discrete(limits=c("")
+  )
+
+
+plot_bar
+
+ggsave(filename = "C:/Users/fmodo/Documents/Analysis-InSituCultivation/Results/plot-taxa-RETRIEVED.png", plot = plot_bar, dpi = 600, width = 9, height = 6)
+
+#########################3
+#iris_¥plot
+remotes::install_github("david-barnett/microViz")
+library("microViz")
+
+######################CRIANDO UM NOVO OBJETO PHYLOSEQ#######################
+#######usando a tabela normalizada, mas com os numeros multiplicados por 1.000.000,
+#para passar pelo processo de filtragem na criacao da pca
+#sem multiplicar o pacote nao entende separadores como "." 
+
+###extract otu_table
+
+dev.sub <-phyloseq_to_df(normalized, addtax = TRUE, addtot = FALSE, addmaxrank = FALSE, sorting = "taxonomy")
+View(dev.sub)
+write.table(dev.sub, "/Users/fmodo/Documents/Analysis-InSituCultivation/Results/ASV.TAB_RETRIEVED-norm-iris.txt", sep = "\t")
+
+###manualmente, editar a tabela, criando um novo arquivo OTU-TABLE normalizado multiplicado por 1 milhao
+
+###upar a nova tabela OTU-TABLE
+
+##importanto a tabela de otu RETRIEVED normalizada e multiplicada por 1 milhao
+otu.ret.norm <- read.table("C:/Users/fmodo/Documents/Analysis-InSituCultivation/files_for_phyloseq/tables per comarison/otu-retrieved.normX1mi.txt")
+OTU.RET.NORM = otu_table(otu.ret.norm, taxa_are_rows = TRUE)
+OTU.RET.NORM
+
+##CRIANDO UM NOVO ARQUIVO PHYLOSEQ NORMALIZADO E COM OS VALORES MULTIPLICADOS
+
+physeq.norm = phyloseq(OTU.RET.NORM, TAX.DEV.SUB, sample.data.dev.sub, dev.sub_tree)
+
+
+#duplicando o objeto phyloseq
+ps.norm = physeq.norm
+
+
+################
+
+####com os dados normalizados
+ps.norm.iris <- ps.norm %>% tax_fix()
+ps1.norm <- ps.norm.iris %>% tax_fix(unknowns = c("uncultured"))
+
+clr_pca <- ps1.norm %>%
+  tax_filter(min_prevalence = 0.05, tax_level = "Family") %>%
+  tax_agg("Family") %>% # aggregate taxa at Genus level
+  tax_transform("clr") %>% # centered log ratio transformation
+  ord_calc(method = "PCA") # Note: PCA is RDA without constraints (& ord_calc uses an RDA method to perform PCA)
+#> Proportional min_prevalence given: 0.05 --> min 41/801 samples.
+clr_pca %>%
+  ord_plot(colour = "device", shape = "device", alpha = 0.7, size = 1.5)# +
+  #scale_colour_viridis_c(option = "inferno", direction = -1, end = 0.8) #+
+ # scale_shape_manual(
+  #  values = c(o = "square open", r = "triangle open", p = "circle"),
+   # name = "DNA\nextraction\nmethod"
+ # )
+
+
+ordu_PCoA
+clr_pca
+
+iris1 <- ord_plot_iris(
+  data = clr_pca,
+  tax_level = "Family", n_taxa = 15,
+  anno_colour = "device",
+  anno_colour_style = list(size =3),
+  anno_binary = "device",
+  anno_binary_style = list(shape = "device", size = 3),
+  
+) +
+  scale_color_manual(values=c("#A5A5A5", "#0070C0", "#9933FF", "#70AD47", "#BF9000", "#C55A11" ))
+ #scale_color_brewer(palette = "Set1")
+
+iris1
+
+ggsave(filename = "C:/Users/fmodo/Documents/Analysis-InSituCultivation/Results/iris-norm.15.2.png", plot = iris1, dpi = 600, width = 9, height = 6)
+##########################
+
+######venn-diagram
+
+######################
+
+remotes::install_github("Russel88/MicEco")
+library(MicEco)
+
+venn <- ps_venn(
+  normalized,
+  group = "device",
+  fraction = 0,
+  weight = FALSE,
+  relative = TRUE,
+  plot = FALSE,
+)
+
+venn
+
+##############
+#upset
+
+# Merge samples
+ps.merged <- merge_samples(ps, "device")
+sample_data(ps.merged)$device <- rownames(sample_data(ps.merged))
+
+
+# upset plot
+st.ust <- data.frame(sample_data(ps.merged))
+Ust <- data.frame(otu_table(ps.merged), check.names = F)
+
+identical(rownames(Ust), rownames(st.ust))
+
+Ust.t <- data.frame(t(Ust), check.names = F)
+
+Ust.t$sum <- rowSums(Ust.t)
+
+Ust.bk <- Ust.t
+
+Ust.t[Ust.t >= 1] <- 1
+
+identical(rownames(Ust.t), rownames(Ust.bk))
+
+Ust.t$sum <- Ust.bk$sum
+
+Ust.tax <- data.frame(tax_table(ps.merged))
+
+identical(rownames(Ust.tax), rownames(Ust.t))
+
+Ust.t.merged <- merge(Ust.t, Ust.tax, by = "row.names")
+rownames(Ust.t.merged) <- Ust.t.merged$Row.names
+Ust.t.merged <- Ust.t.merged[,-1]
+
+Ust.t.merged$Names <- rownames(Ust.t.merged)
+
+str(Ust.t.merged)
+
+#'Obs:
+#'nintersects limita o numero de interseccoes que serao exibidas. 
+#'nesse exemplo esta limitado em 100. Ajuste para sua situacao.
+#'Para mais detalhes https://github.com/hms-dbmi/UpSetR
+
+
+library(UpSetR)
+
+Up <- upset(Ust.t.merged, nsets = 6, nintersects = 100, 
+            order.by = c("freq","degree"), decreasing = c(T,F), keep.order = T,main.bar.color = "black", text.scale = 1.3,number.angles = 0,
+            mb.ratio = c(0.55, 0.45),point.size = 3.5, line.size = 1,group.by = "degree",query.legend = "top",sets.bar.color = "#d056e9")
+
+Up
+
+ggplot2::ggsave(filename = "C:/Users/fmodo/Documents/Analysis-InSituCultivation/Results/upset.png", plot = Up, dpi = 600, width = 16, height = 6)
