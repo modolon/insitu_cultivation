@@ -1,0 +1,113 @@
+#####Importando arquivos para qiime###
+
+qiime tools import \
+   --type 'SampleData[PairedEndSequencesWithQuality]' \
+   --input-path /home/modolonfluvio/insitu/insitu \
+   --input-format CasavaOneEightSingleLanePerSampleDirFmt \
+   --output-path /home/modolonfluvio/insitu/outputs-insitu/insitu.qza
+   
+##Não precisamos de demultiplexing, uma vez que os arquivos vieram prontos da facility###
+##Mas podemos visualizar o estado do nosso arquivo já demutiplexed####
+
+qiime demux summarize \
+  --i-data insitu.qza \
+  --o-visualization demux.qzv
+
+ ######Removendo primers#######
+
+qiime cutadapt trim-paired \
+   --i-demultiplexed-sequences insitu.qza \
+   --p-cores 6 \
+   --p-front-f GTGYCAGCMGCCGCGGTAA \
+   --p-front-r GGACTACNVGGGTWTCTAAT \
+   --o-trimmed-sequences primer-trimmed-insitu.qza \
+   --verbose \
+   &> primer_trimming.log
+   
+   
+   ################CHECANDO A QUALIDADE DAS SEQUENCIAS E PLOTS#####
+   
+
+qiime demux summarize \
+   --i-data primer-trimmed-insitu.qza \
+   --o-visualization primer-trimmed-insitu.qzv \
+
+  
+######Trimando e filtrando########
+
+qiime dada2 denoise-paired \
+--p-n-threads 10 \
+--i-demultiplexed-seqs primer-trimmed-insitu.qza \
+--p-min-overlap 7 \
+--p-trim-left-f 0 \
+--p-trunc-len-f 132 \
+--p-trim-left-r 0 \
+--p-trunc-len-r 130 \
+--output-dir DADA2_denoising_output \
+--verbose \
+&> DADA2_denoising.log
+
+
+#############Summarise and visualise DADA2 results######
+# Denoising stats
+qiime metadata tabulate \
+--m-input-file denoising_stats.qza \
+--o-visualization denoising_stats.qzv \
+
+############FeatureTable and FeatureData summaries##################
+
+qiime metadata tabulate \
+--m-input-file table.qza \
+--o-visualization table.qzv \
+
+##
+
+qiime feature-table tabulate-seqs \
+ 	--i-data representative_sequences.qza \
+ 	--o-visualization rep-seqs.qzv
+
+
+################Assign taxonomy to features with SILVA 138########
+# Get SILVA database 138
+mkdir /home/modolonfluvio/insitu/paired-reference
+cd paired-reference
+mkdir silva-138
+cd silva-138
+wget https://data.qiime2.org/2022.2/common/silva-138-99-tax-515-806.qza
+wget https://data.qiime2.org/2022.2/common/silva-138-99-seqs-515-806.qza
+ 
+mkdir /home/modolonfluvio/insitu/outputs-insitu/taxonomy
+cd taxonomy
+# Train the classifier on this region
+qiime feature-classifier fit-classifier-naive-bayes \
+--i-reference-reads silva-138-99-seqs-515-806.qza \
+--i-reference-taxonomy silva-138-99-tax-515-806.qza \
+--o-classifier classifier_16S_V4.qza \
+--verbose \
+&> 16S_V4_classifier.log
+ 
+# Classify rep seqs
+######This produces the QIIME2 artifact classified_rep_seqs.qza.######couple hours###
+qiime feature-classifier classify-sklearn \
+--i-classifier /home/modolonfluvio/insitu/paired-reference/silva-138/classifier_16S_V4.qza \
+--i-reads /home/modolonfluvio/insitu/outputs-insitu/DADA2_denoising_output/representative_sequences.qza \
+--o-classification classified_rep_seqs.qza
+ 
+
+# Tabulate the features, their taxonomy and the confidence of taxonomy assignment
+#apenas para checar…
+qiime metadata tabulate \
+--m-input-file classified_rep_seqs.qza \
+--o-visualization classified_rep_seqs.qzv
+scp -P 22022 modolonfluvio@146.164.21.7:/home/modolonfluvio/Feather/outputs-analises3/taxonomy/classified_rep_seqs.qzv ./
+_____________________________________________________________
+########Create a phylogenetic tree#############
+# The pipeline requires only the rep seqs, not the classified rep seqs
+mkdir /home/modolonfluvio/insitu/outputs-insitu/tree
+cd tree
+qiime phylogeny align-to-tree-mafft-fasttree \
+--i-sequences /home/modolonfluvio/insitu/outputs-insitu/DADA2_denoising_output/representative_sequences.qza \
+--output-dir phylogenetic_tree \
+--p-n-threads 12 \
+--verbose \
+&> phylogenetic_tree_generation.log
